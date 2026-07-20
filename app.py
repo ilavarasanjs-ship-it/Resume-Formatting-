@@ -296,11 +296,14 @@ elif step == 3:
 
     # Skills — flat list
     st.markdown('<div class="section-label">Skills</div>', unsafe_allow_html=True)
+    st.caption("One item per line. Category labels end with colon (e.g. Laboratory:) — keep them.")
     raw_skills = cand.get("skills", [])
-    # Normalise: handle both flat list and legacy grouped format
     flat_skills = []
     for s in raw_skills:
         if isinstance(s, dict):
+            cat = s.get("category","").strip()
+            if cat:
+                flat_skills.append(cat if cat.endswith(":") else cat+":")
             flat_skills.extend(s.get("items", []))
         elif isinstance(s, str) and s.strip():
             flat_skills.append(s.strip())
@@ -308,8 +311,7 @@ elif step == 3:
         "Skills (one per line)",
         value="\n".join(flat_skills),
         height=200,
-        label_visibility="collapsed",
-        help="One skill per line. All will appear as bullets in the resume."
+        label_visibility="collapsed"
     )
     cand["skills"] = [s.strip() for s in skills_edited.split("\n") if s.strip()]
 
