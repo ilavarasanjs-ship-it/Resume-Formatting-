@@ -8,10 +8,9 @@ import re
 from groq import Groq
 
 # Confirmed working free models on Groq (July 2026)
-# Primary: llama-3.3-70b-versatile — best quality, 1000 req/day
-# Fallback: llama-3.1-8b-instant   — fastest, 14400 req/day
 MODELS = [
     "llama-3.3-70b-versatile",
+    "llama-4-scout-instruct",
     "llama-3.1-8b-instant",
 ]
 
