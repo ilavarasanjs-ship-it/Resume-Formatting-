@@ -1,10 +1,9 @@
 """
-content_extractor.py
-Extracts ALL structured content VERBATIM from any resume.
-Handles complex academic/research CVs with many sub-sections.
+content_extractor.py  v4
+Extracts ALL content verbatim from any length resume/CV.
+Uses multi-pass extraction for long CVs to avoid token limits.
 """
-import json
-import re
+import json, re
 from groq import Groq
 
 MODELS = [
@@ -13,117 +12,184 @@ MODELS = [
     "llama-3.1-8b-instant",
 ]
 
-EXTRACT_SYSTEM = """You are a resume/CV parser. Extract ALL content VERBATIM from the resume.
+# ── Prompt for the STRUCTURE pass (finds all sections + basic info) ──────────
+STRUCTURE_SYSTEM = """You are a resume/CV parser. Extract the complete structure and ALL content verbatim.
 
-CRITICAL RULES:
-1. Copy EVERY piece of text exactly as written — do NOT rephrase, summarize, or skip anything
-2. Include ALL sections found: Education, Skills, Experience, Research, Teaching, Leadership, Publications, Clinical, Professional Development, Certifications, Awards — whatever is in the resume
-3. Include ALL sub-headings within each section (e.g. "Research Experience", "Teaching Experience" inside Experience)
-4. For skills with sub-categories (e.g. "Laboratory:", "Bioinformatics:"), preserve the category name and its items
-5. For experience entries, include the course line if present (e.g. "Course: Make Your Mutant")
-6. Preserve exact dates as written
+CRITICAL: Copy every word exactly as written. Do not skip, summarize, or rephrase anything.
 
-Return ONLY valid JSON with NO markdown fences. Use this exact structure:
-
+Return ONLY valid JSON (no markdown fences):
 {
-  "name": "Full name",
-  "contact": "email | phone | linkedin — all on one line as written",
-  "location": "City, State ZIP if shown",
-  "summary": "Full summary paragraph verbatim — if no summary exists leave empty string",
+  "name": "full name",
+  "contact": "email | phone | linkedin all on one line",
+  "location": "city, state zip if at top of resume",
+  "summary": "full summary paragraph verbatim — empty string if no summary section",
   "education": [
     {
-      "institution": "School name",
-      "degrees": [
-        "Full degree line verbatim",
-        "Second degree or honor or minor verbatim"
-      ]
+      "institution": "school name",
+      "degrees": ["full degree line verbatim including all honors, minors, GPA, majors on one line"]
     }
   ],
-  "certifications": ["Each certification/license verbatim"],
-  "skills": ["skill 1 verbatim", "skill 2 verbatim", "skill 3 verbatim"],
+  "certifications": ["each cert/license verbatim — look in Certifications, Professional Development, and any other section"],
+  "skills": ["each skill item verbatim — flat list, no categories"],
   "experience_sections": [
     {
-      "section_heading": "Section heading (e.g. Research Experience, Teaching Experience, Clinical Experience)",
+      "section_heading": "exact heading from CV e.g. Research Experience, Teaching Experience, Clinical Experience, Leadership Experience, Learning Assistant Experience, Professional Development, Other Research Experience",
       "jobs": [
         {
-          "institution": "Organization/company name",
-          "dates": "Date range as written",
-          "course": "Course name if listed (e.g. Course: Make Your Mutant) — empty string if none",
-          "title": "Job/role title verbatim",
-          "bullets": ["bullet 1 verbatim", "bullet 2 verbatim"]
+          "institution": "org/company name",
+          "dates": "date range verbatim",
+          "course": "Course: X if listed — empty string if none",
+          "title": "job/role title verbatim",
+          "bullets": ["each bullet verbatim without leading bullet character"]
         }
       ]
     }
   ]
 }
 
-IMPORTANT for skills:
-- List ALL skills as a flat array — do NOT create sub-categories or groups
-- Extract every single skill exactly as written
-
-IMPORTANT for experience:
-- Put ALL jobs under a SINGLE section with section_heading = "Experience"
-- Do NOT create sub-headings like "Professional Experience", "Research Experience" etc. — use ONE section
-- Include Employment Gap entries as jobs: institution = "Employment Gap", title = the gap description, dates = the gap period
-- Include the institution/company name on each job
-- Do NOT invent or add any information not in the resume
-
-IMPORTANT for education:
-- Put degrees, honors, GPA, minors, certificates under the institution as separate degree lines
-- Put certifications/licenses in the certifications array, NOT education
+Rules:
+- experience_sections: use the EXACT section headings from the CV. Do NOT merge sections.
+- For skills with sub-headings (Laboratory:, Bioinformatics:, Language:) — still put all as flat list, each item verbatim
+- Certifications: look in ALL sections — Professional Development, Certifications section, any other
+- Summary: this may be a manually added section not in the original resume — include if present
+- course: prefix "Course: " exactly as in the document
+- Include ALL jobs/entries in every section — do not truncate
 """
 
 
-def extract_content_verbatim(api_key, raw_text):
-    if not api_key:
-        raise ValueError("GROQ_API_KEY is not set. Add it to your Streamlit secrets.")
-    if not raw_text or not raw_text.strip():
-        raise ValueError("Resume text is empty. The file could not be read.")
-
-    client = Groq(api_key=api_key)
-    text_to_send = raw_text[:7000] if len(raw_text) > 7000 else raw_text
-
-    last_error = None
-    raw_response = None
+def _call_model(client, system, user_text, max_tokens=4000):
+    last_err = None
     for model in MODELS:
         try:
-            response = client.chat.completions.create(
+            resp = client.chat.completions.create(
                 model=model,
-                messages=[
-                    {"role": "system", "content": EXTRACT_SYSTEM},
-                    {"role": "user",   "content": f"Parse this resume completely. Return only JSON:\n\n{text_to_send}"}
-                ],
-                max_tokens=4000,
-                temperature=0.0
-            )
-            raw_response = response.choices[0].message.content.strip()
-            break
+                messages=[{"role":"system","content":system},
+                          {"role":"user","content":user_text}],
+                max_tokens=max_tokens,
+                temperature=0.0)
+            return resp.choices[0].message.content.strip()
         except Exception as e:
-            last_error = e
+            last_err = e
             continue
-    else:
-        raise ValueError(f"All models failed. Last error: {last_error}\nCheck GROQ_API_KEY at console.groq.com")
+    raise ValueError(f"All models failed: {last_err}")
 
-    # Strip markdown fences
-    cleaned = re.sub(r'^```json\s*', '', raw_response, flags=re.MULTILINE)
-    cleaned = re.sub(r'^```\s*',     '', cleaned,      flags=re.MULTILINE)
-    cleaned = re.sub(r'\s*```$',     '', cleaned,      flags=re.MULTILINE)
+
+def _parse_json(raw):
+    """Strip markdown fences and parse JSON robustly."""
+    cleaned = re.sub(r'^```json\s*', '', raw, flags=re.MULTILINE)
+    cleaned = re.sub(r'^```\s*',     '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'\s*```$',     '', cleaned, flags=re.MULTILINE)
     cleaned = cleaned.strip()
-
     try:
-        result = json.loads(cleaned)
-        # Ensure required keys exist
-        for key, default in [('name',''), ('contact',''), ('location',''),
-                              ('summary',''), ('education',[]), ('certifications',[]),
-                              ('skills',[]), ('experience_sections',[])]:
-            if key not in result:
-                result[key] = default
-        return result
+        return json.loads(cleaned)
     except json.JSONDecodeError:
-        match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-        raise ValueError(f"Could not parse AI response as JSON.\nResponse:\n{raw_response[:800]}")
+        m = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if m:
+            return json.loads(m.group())
+        raise
+
+
+def _merge_results(base, extra):
+    """Merge extra extraction results into base — append sections, extend lists."""
+    # Merge experience_sections
+    existing_headings = {s.get("section_heading","").strip().lower()
+                         for s in base.get("experience_sections",[])}
+    for section in extra.get("experience_sections", []):
+        heading = section.get("section_heading","").strip()
+        if heading.lower() not in existing_headings and section.get("jobs"):
+            base.setdefault("experience_sections", []).append(section)
+            existing_headings.add(heading.lower())
+        else:
+            # Merge jobs into existing section
+            for s in base.get("experience_sections", []):
+                if s.get("section_heading","").strip().lower() == heading.lower():
+                    existing_titles = {j.get("title","") for j in s.get("jobs",[])}
+                    for job in section.get("jobs", []):
+                        if job.get("title","") not in existing_titles:
+                            s.setdefault("jobs", []).append(job)
+                    break
+
+    # Merge skills
+    existing_skills = set(base.get("skills", []))
+    for skill in extra.get("skills", []):
+        if skill not in existing_skills:
+            base.setdefault("skills", []).append(skill)
+            existing_skills.add(skill)
+
+    # Merge certifications
+    existing_certs = set(base.get("certifications", []))
+    for cert in extra.get("certifications", []):
+        if cert not in existing_certs:
+            base.setdefault("certifications", []).append(cert)
+            existing_certs.add(cert)
+
+    # Fill missing top-level fields
+    for field in ["summary", "location", "contact", "name"]:
+        if not base.get(field) and extra.get(field):
+            base[field] = extra[field]
+
+    # Merge education
+    if not base.get("education") and extra.get("education"):
+        base["education"] = extra["education"]
+
+    return base
+
+
+def extract_content_verbatim(api_key, raw_text):
+    """
+    Extract ALL content verbatim from resume. Uses chunked extraction
+    for long CVs so nothing is truncated.
+    """
+    if not api_key:
+        raise ValueError("GROQ_API_KEY not set. Add to Streamlit secrets.")
+    if not raw_text or not raw_text.strip():
+        raise ValueError("Resume text is empty.")
+
+    client = Groq(api_key=api_key)
+    CHUNK = 6000   # chars per chunk — well within token limits
+    OVERLAP = 500  # overlap to catch sections split across chunks
+
+    text = raw_text.strip()
+    total = len(text)
+
+    if total <= CHUNK:
+        # Short CV — single pass
+        chunks = [text]
+    else:
+        # Long CV — split into overlapping chunks
+        chunks = []
+        pos = 0
+        while pos < total:
+            end = min(pos + CHUNK, total)
+            chunks.append(text[pos:end])
+            if end == total:
+                break
+            pos = end - OVERLAP
+
+    result = None
+    for i, chunk in enumerate(chunks):
+        prompt = (f"Parse this {'complete' if len(chunks)==1 else f'part {i+1} of {len(chunks)}'} "
+                  f"resume and return JSON:\n\n{chunk}")
+        try:
+            raw_resp = _call_model(client, STRUCTURE_SYSTEM, prompt)
+            parsed   = _parse_json(raw_resp)
+            if result is None:
+                result = parsed
+            else:
+                result = _merge_results(result, parsed)
+        except Exception as e:
+            if result is None:
+                raise ValueError(f"Extraction failed on chunk {i+1}: {e}")
+            # Partial failure — continue with what we have
+
+    if result is None:
+        raise ValueError("Extraction returned no data.")
+
+    # Ensure required keys
+    for key, default in [('name',''),('contact',''),('location',''),('summary',''),
+                         ('education',[]),('certifications',[]),('skills',[]),
+                         ('experience_sections',[])]:
+        if key not in result:
+            result[key] = default
+
+    return result
