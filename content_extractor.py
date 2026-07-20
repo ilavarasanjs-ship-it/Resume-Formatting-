@@ -7,7 +7,13 @@ import json
 import re
 from groq import Groq
 
-MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Confirmed working free models on Groq (July 2026)
+# Primary: llama-3.3-70b-versatile — best quality, 1000 req/day
+# Fallback: llama-3.1-8b-instant   — fastest, 14400 req/day
+MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+]
 
 EXTRACT_SYSTEM = """You are a resume parser. Extract ALL data from the resume text.
 
@@ -76,17 +82,29 @@ def extract_content_verbatim(api_key, raw_text):
     # Truncate very long resumes to fit context (keep first 6000 chars)
     text_to_send = raw_text[:6000] if len(raw_text) > 6000 else raw_text
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": EXTRACT_SYSTEM},
-            {"role": "user",   "content": f"Parse this resume. Return only JSON:\n\n{text_to_send}"}
-        ],
-        max_tokens=4000,
-        temperature=0.0
-    )
-
-    raw_response = response.choices[0].message.content.strip()
+    # Try each model in order until one works
+    last_error = None
+    for model in MODELS:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": EXTRACT_SYSTEM},
+                    {"role": "user",   "content": f"Parse this resume. Return only JSON:\n\n{text_to_send}"}
+                ],
+                max_tokens=4000,
+                temperature=0.0
+            )
+            raw_response = response.choices[0].message.content.strip()
+            break  # success — stop trying models
+        except Exception as e:
+            last_error = e
+            continue  # try next model
+    else:
+        raise ValueError(
+            f"All models failed. Last error: {last_error}\n"
+            f"Check your GROQ_API_KEY at console.groq.com"
+        )
 
     # Strip markdown code fences if present
     cleaned = raw_response
