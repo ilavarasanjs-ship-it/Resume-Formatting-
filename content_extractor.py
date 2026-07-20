@@ -2,7 +2,6 @@
 content_extractor.py
 Extracts structured content VERBATIM from the raw resume.
 No rewriting, no summarizing — only structural parsing.
-The output preserves the candidate's exact words.
 """
 import json
 import re
@@ -10,84 +9,113 @@ from groq import Groq
 
 MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
-EXTRACT_SYSTEM = """You are a resume parser. Extract structured data from the resume text.
+EXTRACT_SYSTEM = """You are a resume parser. Extract ALL data from the resume text.
 
 CRITICAL RULES:
-1. COPY text VERBATIM — do not rephrase, summarize, improve, or change ANY content
-2. Do not add information that is not in the resume
-3. Do not remove information from the resume
-4. Preserve the exact wording of every bullet point, job title, skill, etc.
-5. If a field is not present, use an empty string or empty list
+1. COPY every piece of text VERBATIM — do not rephrase, summarize, or change anything
+2. Do NOT add information that is not in the resume
+3. Do NOT remove or skip any information
+4. Preserve the exact wording of every bullet, job title, skill, certification, etc.
+5. Extract ALL skills listed — every single one
+6. Extract ALL jobs listed — every single one with all their bullet points
+7. Extract ALL certifications and licenses
 
-Return ONLY this JSON (no markdown fences):
+Return ONLY valid JSON with no markdown fences, no commentary, nothing else.
+The JSON must have exactly these keys:
+
 {
-  "name": "Full name from resume",
-  "location": "City, State ZIP if present at top of resume",
-  "summary": "Full verbatim summary/objective text",
+  "name": "Full name",
+  "location": "City, State ZIP from top of resume",
+  "summary": "Complete summary/objective paragraph verbatim",
   "education": [
     {
-      "institution": "School or college name exactly as written",
-      "degrees": ["Degree name exactly as written", "second degree if any"]
+      "institution": "School name exactly as written",
+      "degrees": ["Degree exactly as written"]
     }
   ],
   "certifications": [
-    "Certification name exactly as written (include expiry if shown)"
+    "Each certification/license exactly as written"
   ],
   "skills": [
-    "Each skill exactly as written"
+    "Each skill exactly as written — include ALL of them"
   ],
   "experience": [
     {
       "company": "Company name exactly as written",
-      "location": "City, State if shown",
-      "dates": "Date range exactly as written (e.g. January 2008 to December 2011)",
+      "dates": "Date range as written, formatted Month Year - Month Year",
       "title": "Job title exactly as written",
       "bullets": [
-        "Each bullet point verbatim, without the leading bullet character"
+        "Each bullet point verbatim without the leading bullet symbol"
       ]
     }
   ]
 }
 
-IMPORTANT: 
-- "dates" should be formatted as "Month Year - Month Year" or "Month Year - Present"
-- For skills, include EVERY skill listed, no filtering
-- For bullets, copy the exact text word-for-word
-- Education and certifications may be listed together — separate them correctly
-- Put certifications/licenses in the "certifications" array, not education
-- Put degrees/diplomas in the "education" array under the institution
+Rules for specific sections:
+- Put school degrees/diplomas under "education" with the school as "institution"
+- Put certifications, licenses, credentials under "certifications" (not education)
+- "dates" format: use dash not "to", e.g. "January 2020 - Present"
+- Include EVERY bullet under each job, even one-liners
+- Skills: list them one per array element, include ALL
 """
 
 
 def extract_content_verbatim(api_key, raw_text):
     """
-    Extract structured content from raw resume text.
-    Returns a dict with name, summary, education, certifications, skills, experience.
-    Content is verbatim — not rewritten.
+    Extract structured content from raw resume text verbatim.
+    Raises ValueError with details if extraction or parsing fails.
     """
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is not set. Add it to your Streamlit secrets.")
+
+    if not raw_text or not raw_text.strip():
+        raise ValueError("Resume text is empty. The file could not be read.")
+
     client = Groq(api_key=api_key)
+
+    # Truncate very long resumes to fit context (keep first 6000 chars)
+    text_to_send = raw_text[:6000] if len(raw_text) > 6000 else raw_text
 
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": EXTRACT_SYSTEM},
-            {"role": "user", "content": f"Parse this resume and return JSON:\n\n{raw_text}"}
+            {"role": "user",   "content": f"Parse this resume. Return only JSON:\n\n{text_to_send}"}
         ],
         max_tokens=4000,
         temperature=0.0
     )
 
-    raw = response.choices[0].message.content.strip()
-    # Strip markdown fences if present
-    raw = re.sub(r'^```json\s*', '', raw)
-    raw = re.sub(r'^```\s*', '', raw)
-    raw = re.sub(r'\s*```$', '', raw)
-    raw = raw.strip()
+    raw_response = response.choices[0].message.content.strip()
 
+    # Strip markdown code fences if present
+    cleaned = raw_response
+    cleaned = re.sub(r'^```json\s*', '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'^```\s*',     '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'\s*```$',     '', cleaned, flags=re.MULTILINE)
+    cleaned = cleaned.strip()
+
+    # Try to parse as-is
     try:
-        return json.loads(raw)
+        result = json.loads(cleaned)
+        # Validate it has the expected keys
+        for key in ['name', 'skills', 'experience']:
+            if key not in result:
+                result[key] = [] if key != 'name' else ''
+        return result
     except json.JSONDecodeError:
-        m = re.search(r'\{.*\}', raw, re.DOTALL)
-        if m:
-            return json.loads(m.group())
-        raise ValueError(f"Could not parse extraction JSON:\n{raw[:500]}")
+        pass
+
+    # Try to find JSON object within the response
+    match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # If all parsing fails, raise with the raw response for debugging
+    raise ValueError(
+        f"Could not parse the AI response as JSON.\n"
+        f"Response was:\n{raw_response[:800]}"
+    )
