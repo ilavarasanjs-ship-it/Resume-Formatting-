@@ -1,0 +1,5 @@
+.streamlit/secrets.toml
+outputs/*.docx
+outputs/*.pdf
+__pycache__/
+*.pyc
