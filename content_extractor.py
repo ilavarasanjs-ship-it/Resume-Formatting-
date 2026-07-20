@@ -62,10 +62,11 @@ IMPORTANT for skills:
 - Extract every single skill exactly as written
 
 IMPORTANT for experience:
-- Group experience entries under their section heading
-- Common sections: Research Experience, Other Research Experience, Teaching Experience, Learning Assistant Experience, Leadership Experience, Clinical Experience, Professional Development
-- If resume has no section groupings, put everything under "Experience"
-- Include the institution/company on the job, not just the role
+- Put ALL jobs under a SINGLE section with section_heading = "Experience"
+- Do NOT create sub-headings like "Professional Experience", "Research Experience" etc. — use ONE section
+- Include Employment Gap entries as jobs: institution = "Employment Gap", title = the gap description, dates = the gap period
+- Include the institution/company name on each job
+- Do NOT invent or add any information not in the resume
 
 IMPORTANT for education:
 - Put degrees, honors, GPA, minors, certificates under the institution as separate degree lines
