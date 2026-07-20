@@ -127,6 +127,11 @@ with st.sidebar:
     st.divider()
     st.caption("Format: Quest Diagnostics standard")
     st.caption("Version 1.0")
+    st.divider()
+    if GROQ_API_KEY:
+        st.caption("API: Connected")
+    else:
+        st.error("GROQ_API_KEY missing. Add it in Streamlit Cloud secrets.")
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -157,27 +162,40 @@ if step == 1:
     )
 
     if upl:
+        # Read file bytes ONCE and reuse — file pointer can only be read once
+        file_bytes = upl.read()
+        file_name  = upl.name
+
+        with st.expander("Preview extracted text"):
+            try:
+                raw_preview = extract_text(file_bytes, file_name)
+                st.text(raw_preview[:3000] if raw_preview.strip() else "(No text extracted)")
+            except Exception as e:
+                st.text(f"Preview error: {e}")
+
         if st.button("Extract and Continue", type="primary",
                      use_container_width=True):
+            # Show API key status
+            if not GROQ_API_KEY:
+                st.error("GROQ_API_KEY is not configured. Add it to Streamlit secrets.")
+                st.stop()
+
             with st.spinner("Reading resume..."):
-                raw = extract_text(upl.read(), upl.name)
+                raw = extract_text(file_bytes, file_name)
+                if not raw.strip():
+                    st.error("Could not extract text from this file. Try a different format.")
+                    st.stop()
                 st.session_state.raw_text = raw
 
-            with st.spinner("Extracting candidate data (verbatim)..."):
+            with st.spinner("Extracting candidate data — this takes 10-20 seconds..."):
                 try:
                     candidate = extract_content_verbatim(GROQ_API_KEY, raw)
                     st.session_state.candidate = candidate
+                    st.session_state.step = 2
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Extraction failed: {e}")
-                    pass  # error shown above
-
-            st.session_state.step = 2
-            st.rerun()
-
-        with st.expander("Preview extracted text"):
-            if upl:
-                raw_preview = extract_text(upl.read(), upl.name)
-                st.text(raw_preview[:3000])
+                    st.caption("Check that your GROQ_API_KEY is correctly set in Streamlit secrets.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
