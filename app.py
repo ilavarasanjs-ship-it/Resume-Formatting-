@@ -294,15 +294,22 @@ elif step == 3:
         label_visibility="collapsed"
     )
 
-    # Skills
+    # Skills — flat list
     st.markdown('<div class="section-label">Skills</div>', unsafe_allow_html=True)
-    skills_raw = "\n".join(cand.get("skills", []))
+    raw_skills = cand.get("skills", [])
+    # Normalise: handle both flat list and legacy grouped format
+    flat_skills = []
+    for s in raw_skills:
+        if isinstance(s, dict):
+            flat_skills.extend(s.get("items", []))
+        elif isinstance(s, str) and s.strip():
+            flat_skills.append(s.strip())
     skills_edited = st.text_area(
         "Skills (one per line)",
-        value=skills_raw,
+        value="\n".join(flat_skills),
         height=200,
         label_visibility="collapsed",
-        help="One skill per line. Order will be preserved."
+        help="One skill per line. All will appear as bullets in the resume."
     )
     cand["skills"] = [s.strip() for s in skills_edited.split("\n") if s.strip()]
 
@@ -328,49 +335,41 @@ elif step == 3:
         value=certs_raw, height=140, label_visibility="collapsed")
     cand["certifications"] = [c.strip() for c in certs_edit.split("\n") if c.strip()]
 
-    # Experience
-    st.markdown('<div class="section-label">Work Experience</div>',
+    # Experience sections
+    st.markdown('<div class="section-label">Experience</div>',
                 unsafe_allow_html=True)
-    exp = cand.get("experience", [])
+    exp_sections = cand.get("experience_sections", [])
 
-    # Reorder controls
-    if len(exp) > 1:
-        st.caption("Drag to reorder — use Move Up / Move Down.")
-        for i, job in enumerate(exp):
-            st.markdown(
-                f'<div class="reorder-item"><b>{job.get("title", "")}</b>'
-                f' &mdash; {job.get("company", "")} ({job.get("dates", "")})</div>',
-                unsafe_allow_html=True)
-            r1, r2, _ = st.columns([1, 1, 5])
-            with r1:
-                if i > 0 and st.button("Move Up", key=f"exp_up_{i}"):
-                    exp[i], exp[i-1] = exp[i-1], exp[i]
-                    cand["experience"] = exp
-                    st.session_state.candidate = cand
-                    st.rerun()
-            with r2:
-                if i < len(exp)-1 and st.button("Move Down", key=f"exp_dn_{i}"):
-                    exp[i], exp[i+1] = exp[i+1], exp[i]
-                    cand["experience"] = exp
-                    st.session_state.candidate = cand
-                    st.rerun()
-        st.divider()
+    for si, section in enumerate(exp_sections):
+        heading = section.get("section_heading", f"Section {si+1}")
+        jobs    = section.get("jobs", [])
+        with st.expander(f"Section: {heading} ({len(jobs)} role(s))", expanded=si==0):
+            section["section_heading"] = st.text_input(
+                "Section heading", value=heading, key=f"sh{si}")
+            jobs_out = []
+            for i, job in enumerate(jobs):
+                st.markdown(f"**Role {i+1}**")
+                c1, c2 = st.columns(2)
+                job["institution"] = c1.text_input("Institution/Company",
+                    value=job.get("institution",""), key=f"si{si}i{i}")
+                job["dates"] = c2.text_input("Dates",
+                    value=job.get("dates",""), key=f"sd{si}d{i}")
+                c3, c4 = st.columns(2)
+                job["title"] = c3.text_input("Title/Role",
+                    value=job.get("title",""), key=f"st{si}t{i}")
+                job["course"] = c4.text_input("Course (if any)",
+                    value=job.get("course",""), key=f"sc{si}c{i}",
+                    placeholder="e.g. Course: Make Your Mutant")
+                bt = st.text_area("Bullet points (one per line)",
+                    value="\n".join(job.get("bullets",[])),
+                    height=130, key=f"sb{si}b{i}")
+                job["bullets"] = [b.strip().lstrip("•·∙-–").strip()
+                                  for b in bt.split("\n") if b.strip()]
+                jobs_out.append(job)
+                if i < len(jobs)-1: st.divider()
+            section["jobs"] = jobs_out
 
-    for i, job in enumerate(exp):
-        with st.expander(f"Position {i+1}: {job.get('title', '')} at {job.get('company', '')}"):
-            c1, c2, c3 = st.columns([2, 2, 2])
-            job["company"] = c1.text_input("Company",    value=job.get("company", ""), key=f"jc{i}")
-            job["title"]   = c2.text_input("Job Title",  value=job.get("title", ""),   key=f"jt{i}")
-            job["dates"]   = c3.text_input("Dates",      value=job.get("dates", ""),   key=f"jd{i}")
-            bullets_raw = "\n".join(job.get("bullets", []))
-            bullets_edit = st.text_area(
-                "Bullet points (one per line)",
-                value=bullets_raw, height=180, key=f"jb{i}",
-                help="Copy verbatim from the original resume")
-            job["bullets"] = [b.strip().lstrip("•·∙-").strip()
-                              for b in bullets_edit.split("\n") if b.strip()]
-
-    cand["experience"] = exp
+    cand["experience_sections"] = exp_sections
     st.session_state.candidate = cand
 
     st.divider()
@@ -384,17 +383,18 @@ elif step == 3:
                      use_container_width=True, key="rev_gen"):
             cand = st.session_state.candidate or {}
 
-            # Assemble data dict
+            # Assemble data dict with new structure
             data = {
-                "name":        cand.get("name", ""),
-                "location":    st.session_state.location.strip(),
-                "commute_info":st.session_state.commute_info.strip(),
-                "availability":st.session_state.availability.strip(),
-                "summary":     cand.get("summary", ""),
-                "education":   cand.get("education", []),
-                "certifications": cand.get("certifications", []),
-                "skills":      cand.get("skills", []),
-                "experience":  cand.get("experience", []),
+                "name":               cand.get("name", ""),
+                "contact":            cand.get("contact", ""),
+                "location":           st.session_state.location.strip(),
+                "commute_info":       st.session_state.commute_info.strip(),
+                "availability":       st.session_state.availability.strip(),
+                "summary":            cand.get("summary", ""),
+                "education":          cand.get("education", []),
+                "certifications":     cand.get("certifications", []),
+                "skills":             cand.get("skills", []),  # flat list of strings
+                "experience_sections":cand.get("experience_sections", []),
             }
 
             # Build DOCX
