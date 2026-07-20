@@ -386,7 +386,6 @@ elif step == 3:
             # Assemble data dict with new structure
             data = {
                 "name":               cand.get("name", ""),
-                "contact":            cand.get("contact", ""),
                 "location":           st.session_state.location.strip(),
                 "commute_info":       st.session_state.commute_info.strip(),
                 "availability":       st.session_state.availability.strip(),
