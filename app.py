@@ -191,9 +191,10 @@ elif step == 2:
         "info"
     )
 
+    candidate = st.session_state.candidate or {}
     st.session_state.location = st.text_input(
         "Candidate Location",
-        value=st.session_state.location or st.session_state.candidate.get("location", ""),
+        value=st.session_state.location or candidate.get("location", ""),
         placeholder="e.g., Dallas, GA 30132",
         help="City, State ZIP — appears centered below the candidate's name"
     )
@@ -240,7 +241,7 @@ elif step == 3:
         "info"
     )
 
-    cand = st.session_state.candidate
+    cand = st.session_state.candidate or {}
 
     # Personal
     st.markdown('<div class="section-label">Personal Information</div>',
@@ -363,7 +364,7 @@ elif step == 3:
     with c2:
         if st.button("Generate Formatted Resume", type="primary",
                      use_container_width=True, key="rev_gen"):
-            cand = st.session_state.candidate
+            cand = st.session_state.candidate or {}
 
             # Assemble data dict
             data = {
